@@ -1,13 +1,45 @@
 import { create } from 'zustand';
 
+export interface SubtitleWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface Subtitle {
   id: string;
   start: number;
   end: number;
   text: string;
+  words?: SubtitleWord[];
+}
+
+export interface MediaItem {
+  id: string;
+  title: string;
+  duration: string;
+  thumbnail: string;
+  file?: File;
+  url?: string;
+  size?: string;
+  type?: 'video' | 'audio' | 'image';
 }
 
 interface EditorState {
+  // Project
+  projectTitle: string;
+  setProjectTitle: (title: string) => void;
+  
+  // Modals & Active Tools
+  activeModal: 'color' | 'sound' | 'ai' | 'export' | null;
+  setActiveModal: (modal: 'color' | 'sound' | 'ai' | 'export' | null) => void;
+
+  // Media Gallery
+  mediaList: MediaItem[];
+  selectedMediaId: string | null;
+  setSelectedMediaId: (id: string | null) => void;
+  addMediaItem: (item: MediaItem) => void;
+
   // Video
   videoFile: File | null;
   videoUrl: string | null;
@@ -29,13 +61,15 @@ interface EditorState {
   sharpness: number; // 0 to 200, 100 = default (no sharpen)
   hdMode: 'original' | '720p' | '1080p' | '4k'; // Output resolution preset
 
-  // Subtitles
+  // Subtitles & Gemini AI
   subtitles: Subtitle[];
   isTranscribing: boolean;
   transcriptionLanguage: string; // 'id', 'auto', 'en', 'ja'
-  transcriptionModel: string; // 'Xenova/whisper-small' | 'Xenova/whisper-base' | 'Xenova/whisper-tiny'
+  geminiApiKey: string;
+  geminiModel: string; // 'gemini-2.0-flash' | 'gemini-1.5-flash' | 'gemini-2.5-flash'
   subtitleStyle: 'classic' | 'tiktok' | 'box';
   subtitleSize: 'sm' | 'md' | 'lg';
+  subtitleAnimation: 'word-reveal' | 'karaoke' | 'none';
   transcriptionProgress: number;
   transcriptionMessage: string;
   activeTab: 'adjustments' | 'subtitles';
@@ -64,15 +98,28 @@ interface EditorState {
   removeSubtitle: (id: string) => void;
   setIsTranscribing: (isTranscribing: boolean) => void;
   setTranscriptionLanguage: (lang: string) => void;
-  setTranscriptionModel: (model: string) => void;
+  setGeminiApiKey: (key: string) => void;
+  setGeminiModel: (model: string) => void;
   setSubtitleStyle: (style: 'classic' | 'tiktok' | 'box') => void;
   setSubtitleSize: (size: 'sm' | 'md' | 'lg') => void;
+  setSubtitleAnimation: (anim: 'word-reveal' | 'karaoke' | 'none') => void;
   setTranscriptionProgress: (progress: number) => void;
   setTranscriptionMessage: (msg: string) => void;
   setActiveTab: (tab: 'adjustments' | 'subtitles') => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
+  projectTitle: 'Untitled Project',
+  setProjectTitle: (projectTitle) => set({ projectTitle }),
+
+  activeModal: null,
+  setActiveModal: (activeModal) => set({ activeModal }),
+
+  mediaList: [],
+  selectedMediaId: null,
+  setSelectedMediaId: (selectedMediaId) => set({ selectedMediaId }),
+  addMediaItem: (item) => set((state) => ({ mediaList: [item, ...state.mediaList] })),
+
   videoFile: null,
   videoUrl: null,
   
@@ -88,14 +135,18 @@ export const useEditorStore = create<EditorState>((set) => ({
   contrast: 100,
   saturation: 100,
   sharpness: 100,
-  hdMode: 'original',
+  hdMode: '1080p',
 
   subtitles: [],
   isTranscribing: false,
   transcriptionLanguage: 'id',
-  transcriptionModel: 'Xenova/whisper-small',
+  geminiApiKey: typeof window !== 'undefined' 
+    ? (localStorage.getItem('gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '') 
+    : '',
+  geminiModel: 'gemini-3.5-transcribe',
   subtitleStyle: 'classic',
   subtitleSize: 'md',
+  subtitleAnimation: 'word-reveal',
   transcriptionProgress: 0,
   transcriptionMessage: 'Menyiapkan AI...',
   activeTab: 'adjustments',
@@ -103,18 +154,30 @@ export const useEditorStore = create<EditorState>((set) => ({
   setVideoFile: (file) => {
     set((state) => {
       if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
+      const url = URL.createObjectURL(file);
+      const newMedia: MediaItem = {
+        id: `media_${Date.now()}`,
+        title: file.name.replace(/\.[^/.]+$/, ''),
+        duration: '00:00',
+        thumbnail: '',
+        file,
+        url,
+        size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+        type: 'video'
+      };
       return { 
         videoFile: file, 
-        videoUrl: URL.createObjectURL(file),
+        videoUrl: url,
         currentTime: 0,
         isPlaying: false,
         brightness: 100,
         contrast: 100,
         saturation: 100,
         sharpness: 100,
-        hdMode: 'original' as const,
+        hdMode: '1080p' as const,
         videoVolume: 100,
-        subtitles: [],
+        mediaList: [newMedia, ...state.mediaList.filter(m => m.file !== file)],
+        selectedMediaId: newMedia.id,
         isTranscribing: false,
         transcriptionProgress: 0,
         transcriptionMessage: 'Menyiapkan AI...'
@@ -125,9 +188,21 @@ export const useEditorStore = create<EditorState>((set) => ({
   setAudioFile: (file) => {
     set((state) => {
       if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
+      const url = URL.createObjectURL(file);
+      const newMedia: MediaItem = {
+        id: `media_${Date.now()}`,
+        title: file.name.replace(/\.[^/.]+$/, ''),
+        duration: '00:00',
+        thumbnail: '',
+        file,
+        url,
+        size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+        type: 'audio'
+      };
       return {
         audioFile: file,
-        audioUrl: URL.createObjectURL(file)
+        audioUrl: url,
+        mediaList: [newMedia, ...state.mediaList.filter(m => m.file !== file)],
       };
     });
   },
@@ -147,14 +222,32 @@ export const useEditorStore = create<EditorState>((set) => ({
 
   setSubtitles: (subtitles) => set({ subtitles }),
   updateSubtitle: (id, newText) => set((state) => ({
-    subtitles: state.subtitles.map(sub => 
-      sub.id === id ? { ...sub, text: newText } : sub
-    )
+    subtitles: state.subtitles.map(sub => {
+      if (sub.id !== id) return sub;
+      const rawWords = newText.trim().split(/\s+/).filter(Boolean);
+      const dur = Math.max(0.1, sub.end - sub.start) / Math.max(1, rawWords.length);
+      const words: SubtitleWord[] = rawWords.map((word, idx) => ({
+        word,
+        start: Math.round((sub.start + idx * dur) * 100) / 100,
+        end: Math.round((sub.start + (idx + 1) * dur) * 100) / 100
+      }));
+      return { ...sub, text: newText, words };
+    })
   })),
   updateSubtitleTimes: (id, start, end) => set((state) => ({
-    subtitles: state.subtitles.map(sub => 
-      sub.id === id ? { ...sub, start: Math.max(0, start), end: Math.max(start + 0.1, end) } : sub
-    ).sort((a, b) => a.start - b.start)
+    subtitles: state.subtitles.map(sub => {
+      if (sub.id !== id) return sub;
+      const safeStart = Math.max(0, start);
+      const safeEnd = Math.max(safeStart + 0.1, end);
+      const rawWords = sub.text.trim().split(/\s+/).filter(Boolean);
+      const dur = (safeEnd - safeStart) / Math.max(1, rawWords.length);
+      const words: SubtitleWord[] = rawWords.map((word, idx) => ({
+        word,
+        start: Math.round((safeStart + idx * dur) * 100) / 100,
+        end: Math.round((safeStart + (idx + 1) * dur) * 100) / 100
+      }));
+      return { ...sub, start: safeStart, end: safeEnd, words };
+    }).sort((a, b) => a.start - b.start)
   })),
   addSubtitle: (sub) => set((state) => ({
     subtitles: [...state.subtitles, sub].sort((a, b) => a.start - b.start)
@@ -164,9 +257,16 @@ export const useEditorStore = create<EditorState>((set) => ({
   })),
   setIsTranscribing: (isTranscribing) => set({ isTranscribing }),
   setTranscriptionLanguage: (transcriptionLanguage) => set({ transcriptionLanguage }),
-  setTranscriptionModel: (transcriptionModel) => set({ transcriptionModel }),
+  setGeminiApiKey: (geminiApiKey) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gemini_api_key', geminiApiKey);
+    }
+    set({ geminiApiKey });
+  },
+  setGeminiModel: (geminiModel) => set({ geminiModel }),
   setSubtitleStyle: (subtitleStyle) => set({ subtitleStyle }),
   setSubtitleSize: (subtitleSize) => set({ subtitleSize }),
+  setSubtitleAnimation: (subtitleAnimation) => set({ subtitleAnimation }),
   setTranscriptionProgress: (transcriptionProgress) => set({ transcriptionProgress }),
   setTranscriptionMessage: (transcriptionMessage) => set({ transcriptionMessage }),
   setActiveTab: (activeTab) => set({ activeTab }),

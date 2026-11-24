@@ -91,16 +91,51 @@ export const exportVideo = async (onProgress: (progress: number) => void) => {
       const fontSize = sizeMap[state.subtitleSize || 'md'] || 48;
       const style = state.subtitleStyle || 'classic';
 
-      const drawtexts = state.subtitles.map(sub => {
-        const text = escapeDrawtext(sub.text);
-        if (style === 'tiktok') {
-          return `drawtext=fontfile=font.ttf:text='${text}':fontcolor=yellow:fontsize=${fontSize}:borderw=4:bordercolor=black:shadowcolor=black@0.8:shadowx=3:shadowy=3:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${sub.start},${sub.end})'`;
-        } else if (style === 'box') {
-          return `drawtext=fontfile=font.ttf:text='${text}':fontcolor=white:fontsize=${fontSize}:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${sub.start},${sub.end})'`;
+      const anim = state.subtitleAnimation || 'word-reveal';
+      const drawtexts: string[] = [];
+
+      for (const sub of state.subtitles) {
+        if (anim === 'word-reveal') {
+          const wordsList = (sub.words && sub.words.length > 0)
+            ? sub.words
+            : sub.text.trim().split(/\s+/).filter(Boolean).map((w, i, arr) => {
+                const dur = Math.max(0.1, sub.end - sub.start) / Math.max(1, arr.length);
+                return {
+                  word: w,
+                  start: sub.start + i * dur,
+                  end: sub.start + (i + 1) * dur
+                };
+              });
+
+          for (let i = 0; i < wordsList.length; i++) {
+            const segStart = wordsList[i].start;
+            const segEnd = (i < wordsList.length - 1) ? wordsList[i + 1].start : sub.end;
+            if (segEnd <= segStart) continue;
+
+            const progressiveSlice = wordsList.slice(0, i + 1).map(w => w.word).join(' ');
+            const rawFormatted = style === 'tiktok' ? progressiveSlice.toUpperCase() : progressiveSlice;
+            const text = escapeDrawtext(rawFormatted);
+
+            if (style === 'tiktok') {
+              drawtexts.push(`drawtext=fontfile=font.ttf:text='${text}':fontcolor=yellow:fontsize=${fontSize}:borderw=4:bordercolor=black:shadowcolor=black@0.8:shadowx=3:shadowy=3:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${segStart},${segEnd})'`);
+            } else if (style === 'box') {
+              drawtexts.push(`drawtext=fontfile=font.ttf:text='${text}':fontcolor=white:fontsize=${fontSize}:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${segStart},${segEnd})'`);
+            } else {
+              drawtexts.push(`drawtext=fontfile=font.ttf:text='${text}':fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:shadowcolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${segStart},${segEnd})'`);
+            }
+          }
         } else {
-          return `drawtext=fontfile=font.ttf:text='${text}':fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:shadowcolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${sub.start},${sub.end})'`;
+          const rawFormatted = style === 'tiktok' ? sub.text.toUpperCase() : sub.text;
+          const text = escapeDrawtext(rawFormatted);
+          if (style === 'tiktok') {
+            drawtexts.push(`drawtext=fontfile=font.ttf:text='${text}':fontcolor=yellow:fontsize=${fontSize}:borderw=4:bordercolor=black:shadowcolor=black@0.8:shadowx=3:shadowy=3:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${sub.start},${sub.end})'`);
+          } else if (style === 'box') {
+            drawtexts.push(`drawtext=fontfile=font.ttf:text='${text}':fontcolor=white:fontsize=${fontSize}:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${sub.start},${sub.end})'`);
+          } else {
+            drawtexts.push(`drawtext=fontfile=font.ttf:text='${text}':fontcolor=white:fontsize=${fontSize}:borderw=3:bordercolor=black:shadowcolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y=h-(h/6):enable='between(t,${sub.start},${sub.end})'`);
+          }
         }
-      });
+      }
       
       videoFilter += `,${drawtexts.join(',')}`;
     } catch (err) {
